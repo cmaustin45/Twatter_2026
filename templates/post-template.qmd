@@ -1,0 +1,915 @@
+---
+subtitle: "Week {{WEEK}} Report"
+date: {{DATE}}
+params:
+  season: {{SEASON}}
+  week: {{WEEK}}
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(knitr)
+source(here::here("R/fleaflicker.R"))
+source(here::here("R/analytics.R"))
+source(here::here("R/tables.R"))
+
+LEAGUE_ID <- 23701
+SPORT     <- "NFL"
+SEASON    <- params$season
+WEEK      <- params$week
+DATE      <- Sys.Date()
+```
+
+# Weekly Report
+
+**Season:** `r SEASON`\
+**Week:** `r WEEK`\
+**Report Date:** `r DATE`
+
+```{r load-data, include=FALSE}
+data <- get_week_cached(LEAGUE_ID, SPORT, SEASON, WEEK)
+player_stats             <- data$player_stats
+scoreboard               <- data$scoreboard
+team_optimal_scores_data <- data$team_optimal_scores
+
+standings_data <- get_league_standings(LEAGUE_ID, SPORT, SEASON)
+
+matchups       <- get_matchup_results(scoreboard)
+team_scores    <- calculate_team_scores(player_stats)
+pos_stats      <- analyze_position_performance(player_stats)
+best_bench     <- find_best_bench_players(player_stats)
+worst_starters <- find_worst_starters(player_stats)
+optimal_scores <- calculate_optimal_scores(team_optimal_scores_data)
+
+highest_scorer <- team_scores$fantasy_team_name[1]
+highest_score  <- team_scores$total_points[1]
+lowest_scorer  <- team_scores$fantasy_team_name[nrow(team_scores)]
+lowest_score   <- team_scores$total_points[nrow(team_scores)]
+avg_score      <- mean(team_scores$total_points)
+```
+
+```{r load-multi-week-data, include=FALSE}
+all_weeks_data <- get_season_to_date(LEAGUE_ID, SPORT, SEASON, WEEK)
+divisions      <- get_divisions(standings_data)
+
+all_player_data <- bind_rows(lapply(all_weeks_data, `[[`, "player_stats")) |>
+  left_join(divisions, by = "fantasy_team_name") |>
+  mutate(division = replace_na(division, "Unknown"))
+
+weekly_scores <- weekly_team_scores(all_weeks_data)
+```
+
+::: {.callout-note icon="false"}
+## Week `r WEEK` Overview
+
+- **Highest Scorer:** `r team_scores$fantasy_team_name[1]` (`r sprintf("%.2f", team_scores$total_points[1])` pts)
+- **Lowest Scorer:** `r team_scores$fantasy_team_name[nrow(team_scores)]` (`r sprintf("%.2f", team_scores$total_points[nrow(team_scores)])` pts)
+- **Score Differential:** `r sprintf("%.2f", highest_score - lowest_score)` pts
+- **Average Score:** `r sprintf("%.2f", mean(team_scores$total_points))` pts
+:::
+
+## 📋 Matchup Results
+
+```{r matchups}
+# Add winner and margin columns
+matchups$Winner <- ifelse(matchups$away_score > matchups$home_score, 
+                          matchups$away_team, matchups$home_team)
+matchups$Margin <- abs(matchups$away_score - matchups$home_score)
+matchups$Status <- ifelse(matchups$Margin < 5, "🔥 Close Game",
+                          ifelse(matchups$Margin > 30, "💥 Blowout", ""))
+
+# Display table
+kable(matchups[, c("away_team", "away_score", "home_team", "home_score", "Winner", "Margin", "Status")],
+      col.names = c("Away Team", "Away Score", "Home Team", "Home Score", "Winner", "Margin", "Status"),
+      digits = 2,
+     align = c("l", "l", "r", "c", "c", "c", "r"), 
+      ) |>
+  column_spec(1, width = "11em") |>
+  column_spec(3, width = "11em") |>
+  column_spec(5, width = "11em") |>
+  column_spec(7, width = "8em") 
+```
+
+## 🏆 Team Rankings - This Week
+
+```{r team-standings}
+# Add rank column
+team_scores$Rank <- 1:nrow(team_scores)
+
+# Add medals
+team_scores$Medal <- ""
+team_scores$Medal[1] <- "🥇"
+if (nrow(team_scores) >= 2) team_scores$Medal[2] <- "🥈"
+if (nrow(team_scores) >= 3) team_scores$Medal[3] <- "🥉"
+
+# Display table
+kable(team_scores[, c("Medal", "Rank", "fantasy_team_name", "total_points")],
+      col.names = c("", "Rank", "Team Name", "Total Points"),
+      digits = 2,
+      align = c("c", "c", "l", "r"),
+      row.names = FALSE)
+```
+
+## 🏳️‍🌈 Glekas Card Tracker
+
+```{r glekas-card}
+# Parse league standings to get all teams with playoff seeding
+all_teams <- list()
+
+if (!is.null(standings_data) && "divisions" %in% names(standings_data)) {
+  for (division in standings_data$divisions) {
+    if ("teams" %in% names(division)) {
+      for (team in division$teams) {
+        team_info <- data.frame(
+          team_id = if (!is.null(team$id)) team$id else NA,
+          team_name = if (!is.null(team$name)) team$name else NA,
+          overall_rank = if (!is.null(team$recordOverall$rank)) team$recordOverall$rank else NA,
+          playoff_seed = if (!is.null(team$recordPostseason$rank)) team$recordPostseason$rank else NA,
+          points_for = if (!is.null(team$pointsFor$value)) team$pointsFor$value else NA,
+          overall_record = if (!is.null(team$recordOverall$formatted)) team$recordOverall$formatted else NA,
+          stringsAsFactors = FALSE
+        )
+        all_teams[[length(all_teams) + 1]] <- team_info
+      }
+    }
+  }
+}
+
+teams_standings <- do.call(rbind, all_teams) %>%
+  arrange(playoff_seed)
+
+# Get 6th playoff seed
+sixth_seed <- teams_standings %>% filter(playoff_seed == 6)
+
+# Get 7-12 playoff seeds
+wildcard_contenders <- teams_standings %>% filter(playoff_seed >= 7 & playoff_seed <= 12)
+
+# Check if any 7-12 seed has more Points For than 6th seed
+glekas_eligible <- wildcard_contenders %>%
+  filter(points_for > sixth_seed$points_for) %>%
+  arrange(desc(points_for))
+
+# Create display table
+glekas_table <- teams_standings %>%
+  filter(playoff_seed >= 6 & playoff_seed <= 12) %>%
+  mutate(
+    status = case_when(
+      playoff_seed == 6 ~ "Current #6 Seed",
+      team_id %in% glekas_eligible$team_id ~ "🃏 Glekas Card Active!",
+      TRUE ~ "Out of Contention"
+    ),
+    points_diff = points_for - sixth_seed$points_for
+  ) %>%
+  arrange(playoff_seed)
+
+glekas_table %>%
+  select(playoff_seed, team_name, overall_record, points_for, points_diff, status) %>%
+  kable(
+    col.names = c("Playoff Seed", "Team", "Record", "Points For", "Diff from #6", "Status"),
+    digits = 2,
+    align = c('c', 'l', 'c', 'c', 'c', 'r')
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  ) %>%
+  row_spec(which(glekas_table$playoff_seed == 6), background = "#fff3cd") %>%
+  row_spec(which(glekas_table$team_id %in% glekas_eligible$team_id), 
+           background = "#d4edda", bold = TRUE)
+```
+
+::: {.callout-tip icon="false"}
+## 🃏 Glekas Card Rule
+
+The #6 playoff seed can be replaced by any team seeded #7-#12 if they have higher total Points For on the season.
+
+**Current Situation:**
+
+`r if(nrow(glekas_eligible) > 0) {   paste0("✅ **", glekas_eligible$team_name[1], "** (Playoff Seed #", glekas_eligible$playoff_seed[1], ") would replace **", sixth_seed$team_name, "** with ", sprintf("%.2f", glekas_eligible$points_for[1]), " Points For vs ", sprintf("%.2f", sixth_seed$points_for), " Points For!") } else {   paste0("❌ No Glekas Card applies - **", sixth_seed$team_name, "** holds the #6 playoff seed with ", sprintf("%.2f", sixth_seed$points_for), " Points For") }`
+:::
+
+```{r glekas-chart}
+#| fig-width: 10.25
+#| fig-height: 6
+
+# Visualize Glekas Card situation
+glekas_chart_data <- teams_standings %>%
+  filter(playoff_seed >= 6 & playoff_seed <= 12) %>%
+  mutate(
+    is_sixth = playoff_seed == 6,
+    is_glekas = team_id %in% glekas_eligible$team_id,
+    fill_color = case_when(
+      is_sixth ~ "Current #6",
+      is_glekas ~ "Glekas Active",
+      TRUE ~ "Other"
+    )
+  )
+
+ggplot(glekas_chart_data, 
+       aes(x = reorder(team_name, -playoff_seed), y = points_for, fill = fill_color)) +
+  geom_col() +
+  geom_hline(yintercept = sixth_seed$points_for, 
+             linetype = "dashed", color = "red", size = 1) +
+  annotate("text", x = 0.5, y = sixth_seed$points_for, 
+           label = sprintf("6th Seed Threshold: %.1f", sixth_seed$points_for),
+           vjust = -0.5, color = "red", size = 3.5) +
+  geom_text(aes(label = sprintf("%.0f", points_for)), 
+            hjust = -0.5, size = 3) +
+  coord_flip() +
+  scale_fill_manual(values = c("Current #6" = "#ffc107", 
+                               "Glekas Active" = "#28a745",
+                               "Other" = "#6c757d")) +
+  labs(title = "Glekas Card Tracker - Points For Comparison",
+       subtitle = "Teams above the red line would claim the #6 playoff spot",
+       x = "Team (by Playoff Seed)",
+       y = "Season Points For",
+       fill = "Status") +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom")
+```
+
+## 📊 Score Distribution
+
+```{r score-distribution}
+#| fig-width: 10
+#| fig-height: 6
+
+p <- ggplot(team_scores, aes(x = total_points)) +
+  geom_histogram(bins = 8, fill = "#3498db", alpha = 0.7, color = "black") +
+  geom_vline(aes(xintercept = mean(total_points)), 
+             color = "red", linetype = "dashed", size = 1) +
+  annotate("text", x = mean(team_scores$total_points), 
+           y = Inf, label = sprintf("Avg: %.1f", mean(team_scores$total_points)),
+           vjust = 2, hjust = -.25, color = "red", size = 5) +
+  labs(title = "Score Distribution Across Teams",
+       x = "Points Scored",
+       y = "Number of Teams") +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"))
+
+# Display in document
+print(p)
+
+# Save as thumbnail
+ggsave("thumbnail.jpg", p, width = 6.67, height = 4.45, dpi = 96)
+
+```
+
+## ⭐ Top Performers
+
+### Top 10 Starters
+
+```{r top-performers}
+top_players <- player_stats[order(-player_stats$points), ]
+top_starters <- top_players[top_players$lineup_group == "START", ][1:10, ]
+top_starters$Rank <- 1:nrow(top_starters)
+
+# Add colored position tiles
+top_starters$Position_Colored <- sapply(top_starters$position, color_position)
+
+kable(top_starters[, c("Rank", "player_name", "Position_Colored", "nfl_team", "opponent", "points", "fantasy_team_name")],
+      format = "html",
+      col.names = c("Rank", "Player", "Pos", "Team", "Opp", "Points", "Fantasy Team"),
+      digits = 2,
+      align = c("c", "l", "c", "c", "c", "r", "r"),
+      row.names = FALSE,
+      escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE)
+```
+
+## 🏈 Position Analysis
+
+```{r position-analysis}
+pos_stats$Position_Colored <- sapply(pos_stats$position, color_position)
+
+kable(pos_stats[, c("Position_Colored", "count", "avg", "max", "min", "total")],
+      format = "html",
+      col.names = c("Position", "# Players", "Avg Points", "Highest Points", "Lowest Points", "Total Points"),
+      digits = 2,
+      align = c("c", "c", "c", "c", "c", "c"),
+      row.names = FALSE,
+      escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE)
+```
+
+## 😞 Worst Lineup Decisions
+
+### Bottom 10 Starters
+
+```{r worst-starters}
+worst_starters$Rank <- 1:nrow(worst_starters)
+
+# Add colored position tiles
+worst_starters$Position_Colored <- sapply(worst_starters$position, color_position)
+
+kable(worst_starters[, c("Rank", "player_name", "Position_Colored", "nfl_team", "opponent", "points", "fantasy_team_name")],
+      format = "html",
+      col.names = c("Rank", "Player", "Pos", "Team", "Opp", "Points", "Fantasy Team"),
+      digits = 2,
+      align = c("c", "l", "c", "c", "c", "c", "r"),
+      row.names = FALSE,
+      escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE)
+```
+
+## 🤦 Missed Opportunities
+
+::: {.callout-tip icon="false"}
+## Points Left on the Bench
+
+These benched players scored MORE than a starter in their position - wasted points!
+:::
+
+```{r bench-analysis}
+# Create position slot mapping for flex eligibility
+position_slots <- list(
+  QB = c("QB"),
+  RB = c("RB", "RB/WR/TE"),
+  WR = c("WR", "RB/WR/TE"),
+  TE = c("TE", "RB/WR/TE"),
+  K = c("K"),
+  "D/ST" = c("D/ST")
+)
+
+# Calculate true missed opportunities
+missed_opportunities <- list()
+
+teams <- unique(player_stats$fantasy_team_name)
+
+for (team in teams) {
+  team_data <- player_stats %>% filter(fantasy_team_name == team)
+  
+  # Get bench players
+  bench <- team_data %>% filter(lineup_group == "BENCH")
+  
+  if (nrow(bench) == 0) next
+  
+  for (i in 1:nrow(bench)) {
+    bench_player <- bench[i, ]
+    
+    # Skip if bench player has NA points
+    if (is.na(bench_player$points)) next
+    
+    # Get eligible slots for this position
+    eligible_slots <- position_slots[[bench_player$position]]
+    
+    if (is.null(eligible_slots)) next
+    
+    # Find starters in eligible slots
+    eligible_starters <- team_data %>%
+      filter(
+        lineup_group == "START",
+        slot %in% eligible_slots,
+        !is.na(points)  # Exclude starters with NA points
+      )
+    
+    if (nrow(eligible_starters) == 0) next
+    
+    # Find the WORST starter in eligible slots (who should have been benched)
+    worst_starter <- eligible_starters %>%
+      arrange(points) %>%
+      head(1)
+    
+    # Calculate opportunity cost
+    opportunity_cost <- bench_player$points - worst_starter$points
+    
+    # Only include if bench player scored more than at least one starter
+    # Check for NA and ensure positive opportunity cost
+    if (!is.na(opportunity_cost) && !is.na(bench_player$points) && 
+        !is.na(worst_starter$points) && opportunity_cost > 0) {
+      missed_opp <- data.frame(
+        team = team,
+        bench_player = bench_player$player_name,
+        bench_position = bench_player$position,
+        bench_nfl_team = bench_player$nfl_team,
+        bench_opponent = bench_player$opponent,
+        bench_points = bench_player$points,
+        should_have_replaced = worst_starter$player_name,
+        starter_position = worst_starter$position,
+        starter_points = worst_starter$points,
+        opportunity_cost = opportunity_cost,
+        stringsAsFactors = FALSE
+      )
+      
+      missed_opportunities[[length(missed_opportunities) + 1]] <- missed_opp
+    }
+  }
+}
+
+if (length(missed_opportunities) > 0) {
+  missed_opp_df <- do.call(rbind, missed_opportunities) %>%
+    arrange(desc(opportunity_cost)) %>%
+    head(10)
+  
+  missed_opp_df %>%
+    mutate(rank = row_number()) %>%
+    select(rank, bench_player, bench_position, bench_nfl_team, bench_points, 
+           should_have_replaced, starter_points, opportunity_cost, team) %>%
+    kable(
+      col.names = c("Rank", "Bench Player", "Pos", "Team", "Bench Pts", 
+                    "Should Replace", "Starter Pts", "Lost Pts", "Fantasy Team"),
+      digits = 2,
+      align = c('c', 'l', 'c', 'c', 'c', 'l', 'c', 'c', 'l')
+    ) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover"),
+      full_width = FALSE
+    ) %>%
+    row_spec(1:3, background = "#fff3cd")
+} else {
+  cat("No missed opportunities this week - all teams made optimal lineup decisions!\n")
+}
+```
+
+```{r bench-chart}
+#| fig-width: 10
+#| fig-height: 6
+if (length(missed_opportunities) > 0 && nrow(missed_opp_df) > 0) {
+  # Define custom team colors
+  team_colors <- c(
+  "AI generated name" = "#e74c3c",        # Red
+  "One for the Thumb in 21" = "#3498db",  # Blue
+  "It's Geno Time!" = "#2ecc71",          # Green
+  "Poopy Butt" = "#8b4513",               # Brown
+  "Sunsets" = "#ff6b6b",                  # Coral
+  "Ass Bongos" = "#9b59b6",               # Purple
+  "Ginger Genius" = "#f39c12",            # Orange
+  "You flew here to do this?" = "#1abc9c", # Turquoise
+  "james = douche (2.0)" = "#3D3D3D",     # Dark Gray
+  "10mg James" = "#ffe0c9",               # Dark Orange
+  "Sleeper" = "#95a5a6",                  # Gray
+  "DaBlacGodfather" = "#0F1056"           # Navy
+)
+  
+  missed_opp_df %>%
+    head(10) %>%
+    mutate(player_label = paste0(bench_player, " (", bench_position, ")"),
+           comparison = paste0("vs ", should_have_replaced)) %>%
+    ggplot(aes(x = reorder(player_label, opportunity_cost), y = opportunity_cost, fill = team)) +
+    geom_col() +
+    geom_text(aes(label = sprintf("+%.1f pts", opportunity_cost)), 
+              hjust = -0.2, size = 4) +
+    coord_flip() +
+    scale_fill_manual(values = team_colors) +
+    labs(title = "Top Missed Opportunities - Points Left on Bench",
+         subtitle = "Points gained if bench player had started instead",
+         x = "Bench Player (Position)",
+         y = "Missed Points",
+         fill = "Team") +
+    theme_minimal(base_size = 16) +
+    theme(plot.title = element_text(hjust = 0.5, size = 17, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5),
+          legend.position = "bottom") +
+    ylim(0, max(missed_opp_df$opportunity_cost) * 1.15)
+}
+```
+
+## 🎯 Lineup Efficiency
+
+```{r lineup-efficiency}
+if (!is.null(optimal_scores) && nrow(optimal_scores) > 0) {
+  # Add efficiency icon
+  optimal_scores$Icon <- ifelse(optimal_scores$efficiency >= 95, "🎯",
+                                 ifelse(optimal_scores$efficiency >= 85, "✓", "⚠"))
+  
+  kable(optimal_scores[, c("Icon", "team", "actual_score", "optimal_score", "efficiency", "points_left")],
+        col.names = c("", "Team", "Actual", "Optimal", "Efficiency %", "Points Left"),
+        digits = c(0, 0, 2, 2, 1, 2),
+        align = c("c", "l", "c", "c", "c", "c"),
+        row.names = FALSE)
+} else {
+  cat("Lineup efficiency data not available for this week.\n")
+}
+```
+
+# Season Trends
+
+::: {.callout-note icon="false"}
+## 📊 Multi-Week Analysis
+
+Analysis based on weeks 1-`r WEEK` of the season
+:::
+
+## ⛳ Division Performance
+
+```{r division-stats}
+
+
+# Calculate division statistics
+division_stats <- weekly_scores %>%
+  left_join(
+    all_player_data %>% distinct(fantasy_team_name, division),
+    by = "fantasy_team_name"
+  ) %>%
+  filter(!is.na(division)) %>%
+  group_by(division) %>%
+  summarise(
+    teams = n_distinct(fantasy_team_name),
+    avg_points_per_week = mean(total_points, na.rm = TRUE),
+    total_points_season = sum(total_points, na.rm = TRUE),
+    highest_weekly_score = max(total_points, na.rm = TRUE),
+    lowest_weekly_score = min(total_points, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(avg_points_per_week))
+
+division_stats %>%
+  kable(
+    col.names = c("Division", "Teams", "Avg Pts/Week", "Total Season Pts", "Highest Weekly", "Lowest Weekly"),
+     align = c('l', 'c', 'c', 'c', 'c', 'c'),
+    digits = 2
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  ) %>%
+  row_spec(1, background = "#d4edda")
+```
+
+```{r division-trends-chart}
+#| fig-width: 10
+#| fig-height: 6
+
+# Division trends over time
+division_weekly <- weekly_scores %>%
+  left_join(
+    all_player_data %>% distinct(fantasy_team_name, division),
+    by = "fantasy_team_name"
+  ) %>%
+  filter(!is.na(division)) %>%
+  group_by(week, division) %>%
+  summarise(avg_points = mean(total_points, na.rm = TRUE), .groups = "drop")
+
+ggplot(division_weekly, aes(x = week, y = avg_points, color = division, group = division)) +
+  geom_line(size = 1.5) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 1:WEEK) +
+  labs(title = "Division Performance Over Time",
+       subtitle = "Average points per team by division",
+       x = "Week",
+       y = "Average Points",
+       color = "Division") +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom")
+```
+
+## ⚽ Position Scoring Trends
+
+```{r position-trends}
+# Analyze position scoring trends over time
+position_trends <- all_player_data %>%
+  filter(lineup_group == "START", !is.na(position), !is.na(points)) %>%
+  group_by(week, position) %>%
+  summarise(
+    avg_points = mean(points, na.rm = TRUE),
+    count = n(),
+    .groups = "drop"
+  )
+
+# Summary table
+position_summary <- position_trends %>%
+  group_by(position) %>%
+  summarise(
+    weeks = n_distinct(week),
+    overall_avg = mean(avg_points, na.rm = TRUE),
+    highest_week = max(avg_points, na.rm = TRUE),
+    lowest_week = min(avg_points, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(overall_avg))
+
+
+position_summary %>%
+  mutate(position = as.character(position),
+         position = color_position(position)) %>%
+  kable(
+    format = "html",
+    col.names = c("Position", "Weeks", "Season Avg", "Best Week", "Worst Week"),
+    align = c("l", "c", "c", "c", "c"),
+    digits = 2,
+    escape = FALSE              
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  )
+
+```
+
+```{r position-trends-chart}
+#| fig-width: 10
+#| fig-height: 6
+
+# Define colors
+position_colors <- c(
+  "QB"   = "#FF6B6B",   # Red
+  "RB"   = "#9B59B6",   # Purple
+  "WR"   = "#2ECC71",   # Emerald green
+  "TE"   = "#FFA07A",   # Orange
+  "K"    = "#95A5A6",   # Gray
+  "D/ST" = "#45B7D1",   # Blue
+  "DEF"  = "#45B7D1"    # Blue
+)
+
+# Plot
+ggplot(position_trends, aes(x = week, y = avg_points, color = position, group = position)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_color_manual(values = position_colors) +   # <- key addition
+  scale_x_continuous(breaks = 1:WEEK) +
+  labs(
+    title = "Position Scoring Trends",
+    subtitle = "Average points by position over the season",
+    x = "Week",
+    y = "Average Points",
+    color = "Position"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "bottom"
+  )
+```
+
+## 🎲 Team Consistency
+
+```{r consistency-metrics}
+# Calculate consistency (coefficient of variation)
+consistency <- weekly_scores %>%
+  group_by(fantasy_team_name) %>%
+  summarise(
+    avg_score = mean(total_points, na.rm = TRUE),
+    std_dev = sd(total_points, na.rm = TRUE),
+    coefficient_variation = (std_dev / avg_score) * 100,
+    weeks_played = n(),
+    highest_score = max(total_points, na.rm = TRUE),
+    lowest_score = min(total_points, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(coefficient_variation) %>%
+  mutate(consistency_rank = row_number())
+
+consistency %>%
+  select(consistency_rank, fantasy_team_name, avg_score, std_dev, 
+         coefficient_variation, highest_score, lowest_score) %>%
+  kable(
+    col.names = c("Rank", "Team", "Avg Score", "Std Dev", "CV %", "High", "Low"),
+    align = c("c", "l", "c", "c", "c", "c", "c"),
+    digits = 2
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  ) %>%
+  row_spec(1:3, background = "#d4edda")
+```
+
+::: {.callout-tip icon="false"}
+## 📈 Understanding Consistency
+
+**Coefficient of Variation (CV)** measures scoring volatility:
+
+- **Lower CV** = More consistent (steady scoring each week)
+- **Higher CV** = Boom/bust team (high variance in scores)
+
+A CV under 15% is very consistent, while over 25% indicates high volatility.
+:::
+
+```{r consistency-chart}
+#| fig-width: 10
+#| fig-height: 6
+
+ggplot(consistency, aes(x = reorder(fantasy_team_name, -coefficient_variation), 
+                        y = coefficient_variation, fill = fantasy_team_name)) +
+  geom_col(show.legend = TRUE) +
+  geom_hline(yintercept = 15, linetype = "dashed", color = "green", size = 1) +
+  geom_hline(yintercept = 25, linetype = "dashed", color = "red", size = 1) +
+  coord_flip() +
+  scale_fill_manual(values = team_colors) +
+  labs(title = "Team Consistency Rankings",
+       subtitle = "Lower CV = More Consistent | Green line = Very Consistent | Red line = High Volatility",
+       x = NULL,
+       y = "Coefficient of Variation (%)",
+       fill = "Team") +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        legend.position = "none")
+```
+
+## 💩 Shit Tier Rankings
+
+```{r who-sucks-analysis}
+# Build the "Who Sucks?" Index
+teams_standings_suck <- teams_standings %>%
+  mutate(
+    # Calculate games played and win percentage
+    games_played = ifelse(!is.na(overall_record), 
+                         str_extract(overall_record, "\\d+(?=-)") %>% as.numeric() +
+                         str_extract(overall_record, "(?<=-)\\d+") %>% as.numeric(), 
+                         0),
+    wins = ifelse(!is.na(overall_record), 
+                 str_extract(overall_record, "\\d+(?=-)") %>% as.numeric(), 
+                 0),
+    losses = ifelse(!is.na(overall_record), 
+                   str_extract(overall_record, "(?<=-)\\d+") %>% as.numeric(), 
+                   0),
+    win_pct = ifelse(games_played > 0, wins / games_played, 0),
+    
+    # Scale metrics so higher = more suck
+    # We NEGATE the good stuff (wins, points for) 
+    suck_win_pct = -scale(win_pct)[, 1],           # lower win% = higher suck
+    suck_pf = -scale(points_for)[, 1],             # lower points for = higher suck
+    suck_index = suck_win_pct + suck_pf            # Combined suck score
+  ) %>%
+  arrange(desc(suck_index)) %>%
+  mutate(suck_rank = row_number())
+
+# Get the worst and best teams
+worst_team <- teams_standings_suck %>% slice(1)
+best_team <- teams_standings_suck %>% slice(n())
+```
+
+::: {.callout-warning icon="false"}
+## 🤡 The "Suck Index"
+
+A scientific™ measure of fantasy football futility combining:
+
+- **Win %** - Losing is sucking
+- **Points For** - Low scoring is sucking
+- **Higher index** = more suck
+:::
+
+```{r who-sucks-table}
+teams_standings_suck %>%
+  select(suck_rank, team_name, overall_record, win_pct, points_for, suck_index) %>%
+  kable(
+    col.names = c("Shit Rank", "Team", "Record", "Win %", "Points For", "Suck Index"),
+    digits = 2,
+    align = c('c', 'l', 'c', 'c', 'r', 'r')
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover"),
+    full_width = FALSE
+  ) %>%
+  row_spec(1, background = "#f8d7da", bold = TRUE) %>%  # Worst team in red
+  row_spec(nrow(teams_standings_suck), background = "#d4edda") %>%  # Best team in green
+  row_spec(2:3, background = "#fff3cd")  # Runner-ups in yellow
+```
+
+::: {.callout-important icon="false"}
+## 🏆 Shit Champion
+
+**`r worst_team$team_name`** officially sucks the most with a Suck Index of **`r sprintf("%.2f", worst_team$suck_index)`**!
+
+- Record: `r worst_team$overall_record` (`r sprintf("%.1f%%", worst_team$win_pct * 100)` win rate)
+- Points For: `r sprintf("%.2f", worst_team$points_for)`
+- Current Playoff Seed: \#`r worst_team$playoff_seed`
+
+Meanwhile, **`r best_team$team_name`** sucks the least with a Suck Index of **`r sprintf("%.2f", best_team$suck_index)`**.
+:::
+
+```{r who-sucks-chart}
+#| fig-width: 10
+#| fig-height: 8
+
+teams_standings_suck %>%
+  mutate(
+    suck_category = case_when(
+      suck_rank == 1 ~ "💩 Supreme Sucker",
+      suck_rank <= 3 ~ "🤮 Major Suckage",
+      suck_rank <= 6 ~ "😬 Moderate Suck",
+      suck_rank <= 9 ~ "😐 Slight Suck",
+      TRUE ~ "😎 Doesn't Suck"
+    ),
+    suck_category = factor(suck_category, levels = c(
+      "😎 Doesn't Suck",
+      "😐 Slight Suck", 
+      "😬 Moderate Suck",
+      "🤮 Major Suckage",
+      "💩 Supreme Sucker"
+    ))
+  ) %>%
+  ggplot(aes(x = reorder(team_name, -suck_index), y = suck_index, fill = suck_category)) +
+  geom_col() +
+  geom_text(aes(label = sprintf("%.2f", suck_index)), 
+            hjust = -0.2, size = 3.5) +
+  coord_flip() +
+  scale_fill_manual(values = c(
+    "😎 Doesn't Suck" = "#2ecc71",
+    "😐 Slight Suck" = "#95a5a6",
+    "😬 Moderate Suck" = "#f39c12",
+    "🤮 Major Suckage" = "#e67e22",
+    "💩 Supreme Sucker" = "#e74c3c"
+  )) +
+  labs(title = "🤡 Official \"Who Sucks?\" Power Rankings",
+       subtitle = "Scientific measurement of fantasy football incompetence",
+       x = NULL,
+       y = "Suck Index (Higher = More Suck)",
+       fill = "Suck Category") +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "right") +
+  ylim(min(teams_standings_suck$suck_index) - 0.5, 
+       max(teams_standings_suck$suck_index) * 1.15)
+```
+
+```{r suck-components-chart}
+#| fig-width: 10
+#| fig-height: 8
+
+# Show breakdown of suck components
+suck_components <- teams_standings_suck %>%
+  select(team_name, suck_win_pct, suck_pf) %>%
+  pivot_longer(cols = starts_with("suck_"), 
+               names_to = "component", 
+               values_to = "value") %>%
+  mutate(component = case_when(
+    component == "suck_win_pct" ~ "Poor Win %",
+    component == "suck_pf" ~ "Low Scoring",
+    TRUE ~ component
+  ))
+
+ggplot(suck_components, aes(x = reorder(team_name, value), y = value, fill = component)) +
+  geom_col(position = "stack") +
+  coord_flip() +
+  scale_fill_manual(values = c(
+    "Poor Win %" = "#e74c3c",
+    "Low Scoring" = "#f39c12"
+  )) +
+  labs(title = "Suck Index Breakdown by Component",
+       subtitle = "What makes each team suck?",
+       x = NULL,
+       y = "Cumulative Suck Score",
+       fill = "Suck Factor") +
+  theme_minimal(base_size = 16) +
+  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom")
+```
+
+::: {.callout-note icon="false"}
+## 📊 Methodology
+
+The Suck Index is calculated by standardizing (z-scores) two metrics:
+
+1.  **Win Percentage** (negated) - Losing teams get positive suck points
+2.  **Points For** (negated) - Low-scoring teams get positive suck points
+
+Both components are weighted equally and summed. This is completely arbitrary and designed to generate maximum trash talk. 🗑️
+:::
+
+# 📈 Key Insights
+
+```{r insights, results='asis'}
+# Generate insights
+
+player_stats <- data$player_stats
+
+# Calculate team scores (starters only)
+starters <- player_stats %>% filter(lineup_group == "START")
+
+bench_players <- player_stats %>%
+  filter(lineup_group == "BENCH") %>%
+  arrange(desc(points)) %>%
+  head(10)
+
+mvp <- starters %>% arrange(desc(points)) %>% head(1)
+worst_starter <- starters %>% arrange(points) %>% head(1)
+best_bench <- bench_players %>% head(1)
+close_games <- matchups[abs(matchups$away_score - matchups$home_score) < 5, ]
+blowouts <- matchups[abs(matchups$away_score - matchups$home_score) > 30, ]
+```
+
+::: {.callout-important icon="false"}
+## Week `r WEEK` Highlights
+
+- **Week MVP:** `r mvp$player_name` (`r mvp$position`, `r mvp$nfl_team`) scored `r sprintf("%.2f", mvp$points)` points for `r mvp$fantasy_team_name`
+
+- **Biggest Disappointment:** `r worst_starter$player_name` (`r worst_starter$position`, `r worst_starter$nfl_team`) scored only `r sprintf("%.2f", worst_starter$points)` points for `r worst_starter$fantasy_team_name`
+
+- **Biggest Missed Opportunity:** `r best_bench$player_name` (`r best_bench$position`, `r best_bench$nfl_team`) left `r sprintf("%.2f", best_bench$points)` points on the bench for `r best_bench$fantasy_team_name`
+
+- **Score Range:** `r sprintf("%.2f", max(team_scores$total_points) - min(team_scores$total_points))` point difference between highest and lowest scoring teams
+
+- **Close Games:** `r nrow(close_games)` matchup(s) decided by less than 5 points
+
+- **Blowouts:** `r nrow(blowouts)` matchup(s) with 30+ point margins
+:::
+
+# 📝 Week `r WEEK` Storylines
+
+<!-- Storylines coming next week. -->
+
+------------------------------------------------------------------------
+
+*Data sourced from Fleaflicker API.*

@@ -1,0 +1,14 @@
+# Applies to every post under posts/
+freeze: true
+title: "They Are Who We Thought They Were"
+categories: [weekly report]
+image: "thumbnail.jpg"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    toc-location: right
+execute:
+  echo: false
+  warning: false
+  message: false

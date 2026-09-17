@@ -1,0 +1,36 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - "*.qmd"
+    - "!drafts/"
+    - "!templates/"
+
+website:
+  title: "Twatter 2026"
+  description: "They Are Who We Thought They Were - League 23701"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Weekly Reports
+      - href: season.qmd
+        text: Season
+    right:
+      - about.qmd
+  page-footer:
+    center: "Data from the Fleaflicker API. Updated weekly."
+
+format:
+  html:
+    theme:
+      - cosmo
+      - brand
+    css: styles.css
+    toc: true
+    code-fold: true
+    code-summary: "Show code"
+
+execute:
+  freeze: auto
+  warning: false
+  message: false
