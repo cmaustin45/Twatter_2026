@@ -1,6 +1,99 @@
 ---
 title: "Season"
+subtitle: "Standings, all-play, and luck"
+execute:
+  echo: false
+  warning: false
+  message: false
 ---
 
-Season-long standings and trends coming soon.
----
+```{r setup, include=FALSE}
+library(tidyverse)
+library(knitr)
+source(here::here("R/fleaflicker.R"))
+source(here::here("R/analytics.R"))
+source(here::here("R/tables.R"))
+source(here::here("R/season.R"))
+
+LEAGUE_ID <- 23701
+SPORT     <- "NFL"
+SEASON    <- 2026
+
+# Use whatever weeks are already cached; never hit the API from this page.
+cached <- list.files(here::here("data"), pattern = sprintf("^%d_week_\\d{2}\\.rds$", SEASON))
+WEEK   <- max(as.integer(sub(".*_week_(\\d{2})\\.rds", "\\1", cached)))
+
+all_weeks_data <- get_season_to_date(LEAGUE_ID, SPORT, SEASON, WEEK)
+weekly_scores  <- weekly_team_scores(all_weeks_data)
+log            <- season_matchup_log(all_weeks_data)
+record         <- season_record(log)
+all_play       <- all_play_record(weekly_scores)
+luck           <- luck_table(record, all_play)
+```
+
+*Through Week `r WEEK`.*
+
+## Standings
+
+```{r standings}
+record |>
+  mutate(across(c(points_for, points_against, avg_for, avg_against), \(x) round(x, 1))) |>
+  select(Team = team, Record = record, PF = points_for, PA = points_against,
+         `Avg PF` = avg_for, `Avg PA` = avg_against) |>
+  ff_kable()
+```
+
+## All-Play Record
+
+Each team's record if it had played every other team every week. Removes schedule luck.
+
+```{r all-play}
+luck |>
+  mutate(ap_pct = sprintf("%.3f", ap_pct)) |>
+  select(Team = team, Actual = record, `All-Play` = all_play, `All-Play %` = ap_pct) |>
+  arrange(desc(`All-Play %`)) |>
+  ff_kable()
+```
+
+## Luck Index
+
+Actual wins minus expected wins from all-play. Positive means the schedule has been kind.
+
+```{r luck-chart, fig.height=5.5}
+luck |>
+  mutate(team = fct_reorder(team, luck)) |>
+  ggplot(aes(x = team, y = luck, fill = team)) +
+  geom_col(show.legend = FALSE) +
+  geom_hline(yintercept = 0, color = "grey40") +
+  coord_flip() +
+  scale_fill_manual(values = team_colors, na.value = "grey70") +
+  labs(x = NULL, y = "Wins above expected") +
+  theme_minimal(base_size = 13)
+```
+
+## Points Against
+
+```{r points-against, fig.height=5.5}
+record |>
+  mutate(team = fct_reorder(team, points_against)) |>
+  ggplot(aes(x = team, y = points_against, fill = team)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  scale_fill_manual(values = team_colors, na.value = "grey70") +
+  labs(x = NULL, y = "Total points against") +
+  theme_minimal(base_size = 13)
+```
+
+## Weekly Scores
+
+```{r weekly-scores, fig.height=6}
+weekly_scores |>
+  ggplot(aes(x = week, y = total_points, color = fantasy_team_name)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = team_colors, na.value = "grey70", name = NULL) +
+  scale_x_continuous(breaks = seq_len(WEEK)) +
+  labs(x = "Week", y = "Points") +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```

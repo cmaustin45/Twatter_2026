@@ -1,9 +1,9 @@
 ---
-subtitle: "Week {{WEEK}} Report"
-date: {{DATE}}
+subtitle: "Week 2 Report"
+date: 2026-09-22
 params:
-  season: {{SEASON}}
-  week: {{WEEK}}
+  season: 2026
+  week: 2
 ---
 
 ```{r setup, include=FALSE}
