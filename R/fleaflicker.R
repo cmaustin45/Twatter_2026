@@ -229,14 +229,36 @@ get_season_to_date <- function(league_id, sport, season, week, ...) {
 # Division lookup as a data frame, ready for left_join()
 get_divisions <- function(standings_data) {
   if (is.null(standings_data) || !("divisions" %in% names(standings_data))) {
-    return(data.frame(fantasy_team_name = character(), division = character()))
+    return(data.frame(fantasy_team_id = integer(), fantasy_team_name = character(),
+                      division = character()))
   }
   rows <- lapply(standings_data$divisions, function(div) {
     data.frame(
+      fantasy_team_id   = vapply(div$teams, function(t) t$id, numeric(1)),
       fantasy_team_name = vapply(div$teams, function(t) t$name, character(1)),
       division          = div$name,
       stringsAsFactors  = FALSE
     )
   })
   do.call(rbind, rows)
+}
+
+# Replace team names in cached weeks with the current name for that team ID.
+normalize_team_names <- function(all_weeks_data, divisions) {
+  lookup <- setNames(divisions$fantasy_team_name, divisions$fantasy_team_id)
+  lapply(all_weeks_data, function(wk) {
+    ids <- as.character(wk$player_stats$fantasy_team_id)
+    wk$player_stats$fantasy_team_name <- unname(lookup[ids])
+    if (!is.null(wk$team_optimal_scores)) {
+      tids <- as.character(wk$team_optimal_scores$team_id)
+      wk$team_optimal_scores$team_name <- unname(lookup[tids])
+    }
+    if ("games" %in% names(wk$scoreboard)) {
+      g <- wk$scoreboard$games
+      g$away.name <- unname(lookup[as.character(g$away.id)])
+      g$home.name <- unname(lookup[as.character(g$home.id)])
+      wk$scoreboard$games <- g
+    }
+    wk
+  })
 }

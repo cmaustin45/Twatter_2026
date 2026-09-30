@@ -12,6 +12,9 @@ library(knitr)
 source(here::here("R/fleaflicker.R"))
 source(here::here("R/analytics.R"))
 source(here::here("R/tables.R"))
+source(here::here("R/theme.R"))
+
+#knitr::opts_chunk$set(dev = "ragg_png")
 
 LEAGUE_ID <- 23701
 SPORT     <- "NFL"
@@ -49,12 +52,12 @@ avg_score      <- mean(team_scores$total_points)
 ```
 
 ```{r load-multi-week-data, include=FALSE}
-all_weeks_data <- get_season_to_date(LEAGUE_ID, SPORT, SEASON, WEEK)
 divisions      <- get_divisions(standings_data)
+all_weeks_data <- get_season_to_date(LEAGUE_ID, SPORT, SEASON, WEEK) |>
+  normalize_team_names(divisions)
 
 all_player_data <- bind_rows(lapply(all_weeks_data, `[[`, "player_stats")) |>
-  left_join(divisions, by = "fantasy_team_name") |>
-  mutate(division = replace_na(division, "Unknown"))
+  left_join(select(divisions, fantasy_team_id, division), by = "fantasy_team_id")
 
 weekly_scores <- weekly_team_scores(all_weeks_data)
 ```
@@ -205,29 +208,24 @@ glekas_chart_data <- teams_standings %>%
     )
   )
 
-ggplot(glekas_chart_data, 
+ggplot(glekas_chart_data,
        aes(x = reorder(team_name, -playoff_seed), y = points_for, fill = fill_color)) +
   geom_col() +
-  geom_hline(yintercept = sixth_seed$points_for, 
-             linetype = "dashed", color = "red", size = 1) +
-  annotate("text", x = 0.5, y = sixth_seed$points_for, 
+  geom_hline(yintercept = sixth_seed$points_for,
+             linetype = "dashed", color = brand[["red"]], linewidth = 1) +
+  annotate("text", x = 0.5, y = sixth_seed$points_for,
            label = sprintf("6th Seed Threshold: %.1f", sixth_seed$points_for),
-           vjust = -0.5, color = "red", size = 3.5) +
-  geom_text(aes(label = sprintf("%.0f", points_for)), 
-            hjust = -0.5, size = 3) +
+           vjust = -0.5, color = brand[["red"]], size = 3.5) +
+  geom_text(aes(label = sprintf("%.0f", points_for)), hjust = -0.5, size = 3) +
   coord_flip() +
-  scale_fill_manual(values = c("Current #6" = "#ffc107", 
-                               "Glekas Active" = "#28a745",
-                               "Other" = "#6c757d")) +
+  scale_fill_manual(values = c("Current #6"   = brand[["orange"]],
+                               "Glekas Active" = brand[["green"]],
+                               "Other"         = brand[["slate"]])) +
   labs(title = "Glekas Card Tracker - Points For Comparison",
-       subtitle = "Teams above the red line would claim the #6 playoff spot",
+       subtitle = "Teams above the dashed line would claim the #6 playoff spot",
        x = "Team (by Playoff Seed)",
        y = "Season Points For",
-       fill = "Status") +
-  theme_minimal(base_size = 16) +
-  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5),
-        legend.position = "bottom")
+       fill = NULL)
 ```
 
 ## 📊 Score Distribution
@@ -432,40 +430,34 @@ if (length(missed_opportunities) > 0) {
 if (length(missed_opportunities) > 0 && nrow(missed_opp_df) > 0) {
   # Define custom team colors
   team_colors <- c(
-  "AI generated name" = "#e74c3c",        # Red
+  "Estyfied" = "#e74c3c",        # Red
   "One for the Thumb in 21" = "#3498db",  # Blue
   "It's Geno Time!" = "#2ecc71",          # Green
-  "Poopy Butt" = "#8b4513",               # Brown
-  "Sunsets" = "#ff6b6b",                  # Coral
+  "Activate Winning" = "#8b4513",               # Brown
+  "Thumb the Punt" = "#ff6b6b",                  # Coral
   "Ass Bongos" = "#9b59b6",               # Purple
   "Ginger Genius" = "#f39c12",            # Orange
   "You flew here to do this?" = "#1abc9c", # Turquoise
-  "james = douche (2.0)" = "#3D3D3D",     # Dark Gray
-  "10mg James" = "#ffe0c9",               # Dark Orange
-  "Sleeper" = "#95a5a6",                  # Gray
+  "Shaboozy 4 The Win!🥇" = "#3D3D3D",     # Dark Gray
+  "I love kicking part" = "#ffe0c9",               # Dark Orange
+  "Daddysagirl" = "#95a5a6",                  # Gray
   "DaBlacGodfather" = "#0F1056"           # Navy
 )
   
   missed_opp_df %>%
-    head(10) %>%
-    mutate(player_label = paste0(bench_player, " (", bench_position, ")"),
-           comparison = paste0("vs ", should_have_replaced)) %>%
-    ggplot(aes(x = reorder(player_label, opportunity_cost), y = opportunity_cost, fill = team)) +
-    geom_col() +
-    geom_text(aes(label = sprintf("+%.1f pts", opportunity_cost)), 
-              hjust = -0.2, size = 4) +
-    coord_flip() +
-    scale_fill_manual(values = team_colors) +
-    labs(title = "Top Missed Opportunities - Points Left on Bench",
-         subtitle = "Points gained if bench player had started instead",
-         x = "Bench Player (Position)",
-         y = "Missed Points",
-         fill = "Team") +
-    theme_minimal(base_size = 16) +
-    theme(plot.title = element_text(hjust = 0.5, size = 17, face = "bold"),
-          plot.subtitle = element_text(hjust = 0.5),
-          legend.position = "bottom") +
-    ylim(0, max(missed_opp_df$opportunity_cost) * 1.15)
+  head(10) %>%
+  mutate(player_label = paste0(bench_player, " (", bench_position, ")"),
+         comparison   = paste0("vs ", should_have_replaced)) %>%
+  ggplot(aes(x = reorder(player_label, opportunity_cost), y = opportunity_cost, fill = team)) +
+  geom_col() +
+  geom_text(aes(label = sprintf("+%.1f pts", opportunity_cost)), hjust = -0.2, size = 4) +
+  coord_flip() +
+  scale_fill_team() +
+  labs(title = "Top Missed Opportunities - Points Left on Bench",
+       subtitle = "Points gained if bench player had started instead",
+       x = "Bench Player (Position)",
+       y = "Missed Points") +
+  ylim(0, max(missed_opp_df$opportunity_cost) * 1.15)
 }
 ```
 
@@ -546,18 +538,14 @@ division_weekly <- weekly_scores %>%
   summarise(avg_points = mean(total_points, na.rm = TRUE), .groups = "drop")
 
 ggplot(division_weekly, aes(x = week, y = avg_points, color = division, group = division)) +
-  geom_line(size = 1.5) +
+  geom_line(linewidth = 1.5) +
   geom_point(size = 3) +
   scale_x_continuous(breaks = 1:WEEK) +
+  scale_color_manual(values = unname(brand[c("navy", "orange", "green", "red")])) +
   labs(title = "Division Performance Over Time",
        subtitle = "Average points per team by division",
        x = "Week",
-       y = "Average Points",
-       color = "Division") +
-  theme_minimal(base_size = 16) +
-  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5),
-        legend.position = "bottom")
+       y = "Average Points")
 ```
 
 ## ⚽ Position Scoring Trends
@@ -620,23 +608,14 @@ position_colors <- c(
 
 # Plot
 ggplot(position_trends, aes(x = week, y = avg_points, color = position, group = position)) +
-  geom_line(size = 1.2) +
+  geom_line(linewidth = 1.2) +
   geom_point(size = 2) +
-  scale_color_manual(values = position_colors) +   # <- key addition
+  scale_color_manual(values = position_colors) +
   scale_x_continuous(breaks = 1:WEEK) +
-  labs(
-    title = "Position Scoring Trends",
-    subtitle = "Average points by position over the season",
-    x = "Week",
-    y = "Average Points",
-    color = "Position"
-  ) +
-  theme_minimal(base_size = 16) +
-  theme(
-    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
-    plot.subtitle = element_text(hjust = 0.5),
-    legend.position = "bottom"
-  )
+  labs(title = "Position Scoring Trends",
+       subtitle = "Average points by position over the season",
+       x = "Week",
+       y = "Average Points")
 ```
 
 ## 🎲 Team Consistency
@@ -687,22 +666,17 @@ A CV under 15% is very consistent, while over 25% indicates high volatility.
 #| fig-width: 10
 #| fig-height: 6
 
-ggplot(consistency, aes(x = reorder(fantasy_team_name, -coefficient_variation), 
+ggplot(consistency, aes(x = reorder(fantasy_team_name, -coefficient_variation),
                         y = coefficient_variation, fill = fantasy_team_name)) +
-  geom_col(show.legend = TRUE) +
-  geom_hline(yintercept = 15, linetype = "dashed", color = "green", size = 1) +
-  geom_hline(yintercept = 25, linetype = "dashed", color = "red", size = 1) +
+  geom_col(show.legend = FALSE) +
+  geom_hline(yintercept = 15, linetype = "dashed", color = brand[["green"]], linewidth = 1) +
+  geom_hline(yintercept = 25, linetype = "dashed", color = brand[["red"]], linewidth = 1) +
   coord_flip() +
-  scale_fill_manual(values = team_colors) +
+  scale_fill_team() +
   labs(title = "Team Consistency Rankings",
-       subtitle = "Lower CV = More Consistent | Green line = Very Consistent | Red line = High Volatility",
+       subtitle = "Lower CV = more consistent. Green line = very consistent, red line = high volatility",
        x = NULL,
-       y = "Coefficient of Variation (%)",
-       fill = "Team") +
-  theme_minimal(base_size = 16) +
-  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5, size = 10),
-        legend.position = "none")
+       y = "Coefficient of Variation (%)")
 ```
 
 ## 💩 Shit Tier Rankings
@@ -800,26 +774,21 @@ teams_standings_suck %>%
   ) %>%
   ggplot(aes(x = reorder(team_name, -suck_index), y = suck_index, fill = suck_category)) +
   geom_col() +
-  geom_text(aes(label = sprintf("%.2f", suck_index)), 
-            hjust = -0.2, size = 3.5) +
+  geom_text(aes(label = sprintf("%.2f", suck_index)), hjust = -0.2, size = 3.5) +
   coord_flip() +
   scale_fill_manual(values = c(
-    "😎 Doesn't Suck" = "#2ecc71",
-    "😐 Slight Suck" = "#95a5a6",
-    "😬 Moderate Suck" = "#f39c12",
-    "🤮 Major Suckage" = "#e67e22",
-    "💩 Supreme Sucker" = "#e74c3c"
+    "😎 Doesn't Suck"   = brand[["green"]],
+    "😐 Slight Suck"    = brand[["slate"]],
+    "😬 Moderate Suck"  = brand[["orange"]],
+    "🤮 Major Suckage"  = "#E67E22",
+    "💩 Supreme Sucker" = brand[["red"]]
   )) +
   labs(title = "🤡 Official \"Who Sucks?\" Power Rankings",
        subtitle = "Scientific measurement of fantasy football incompetence",
        x = NULL,
-       y = "Suck Index (Higher = More Suck)",
-       fill = "Suck Category") +
-  theme_minimal(base_size = 16) +
-  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5),
-        legend.position = "right") +
-  ylim(min(teams_standings_suck$suck_index) - 0.5, 
+       y = "Suck Index (Higher = More Suck)") +
+  theme(legend.position = "right") +
+  ylim(min(teams_standings_suck$suck_index) - 0.5,
        max(teams_standings_suck$suck_index) * 1.15)
 ```
 
@@ -842,19 +811,12 @@ suck_components <- teams_standings_suck %>%
 ggplot(suck_components, aes(x = reorder(team_name, value), y = value, fill = component)) +
   geom_col(position = "stack") +
   coord_flip() +
-  scale_fill_manual(values = c(
-    "Poor Win %" = "#e74c3c",
-    "Low Scoring" = "#f39c12"
-  )) +
+  scale_fill_manual(values = c("Poor Win %"  = brand[["red"]],
+                               "Low Scoring" = brand[["orange"]])) +
   labs(title = "Suck Index Breakdown by Component",
        subtitle = "What makes each team suck?",
        x = NULL,
-       y = "Cumulative Suck Score",
-       fill = "Suck Factor") +
-  theme_minimal(base_size = 16) +
-  theme(plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
-        plot.subtitle = element_text(hjust = 0.5),
-        legend.position = "bottom")
+       y = "Cumulative Suck Score")
 ```
 
 ::: {.callout-note icon="false"}

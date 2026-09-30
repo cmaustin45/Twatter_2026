@@ -16,17 +16,17 @@ position_colors <- c(
 
 # 2026 team names go here. Update once after the draft.
 team_colors <- c(
-  "AI generated name"         = "#e74c3c",
+  "Estyfied"                  = "#e74c3c",
   "One for the Thumb in 21"   = "#3498db",
   "It's Geno Time!"           = "#0E9F56",
-  "Poopy Butt"                = "#8b4513",
-  "Sunsets"                   = "#ff6b6b",
+  "Activate Winning"          = "#8b4513",
+  "Thumb the Punt"            = "#ff6b6b",
   "Ass Bongos"                = "#9b59b6",
   "Ginger Genius"             = "#f39c12",
   "You flew here to do this?" = "#1abc9c",
-  "james = douche (2.0)"      = "#3D3D3D",
-  "10mg James"                = "#ffe0c9",
-  "Sleeper"                   = "#95a5a6",
+  "Shaboozy 4 The Win!🥇"     = "#3D3D3D",
+  "I love kicking part"       = "#ffe0c9",
+  "Daddysagirl"               = "#95a5a6",
   "DaBlacGodfather"           = "#0F1056"
 )
 

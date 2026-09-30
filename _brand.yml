@@ -1,0 +1,51 @@
+meta:
+  name: Twatter 2026
+  link: https://cmaustin45.github.io/Twatter_2026/
+
+color:
+  palette:
+    navy:     "#0F1056"
+    orange:   "#F39C12"
+    green:    "#0E9F56"
+    red:      "#E74C3C"
+    ink:      "#1F2430"
+    paper:    "#FAFAF7"
+    slate:    "#5C6370"
+  foreground: ink
+  background: paper
+  primary:    navy
+  secondary:  slate
+  success:    green
+  warning:    orange
+  danger:     red
+
+typography:
+  fonts:
+    - family: Inter
+      source: google
+      weight: [400, 600]
+    - family: Oswald
+      source: google
+      weight: [500, 700]
+    - family: JetBrains Mono
+      source: google
+  base:
+    family: Inter
+    size: 16px
+  headings:
+    family: Oswald
+    weight: 500
+    color: navy
+  monospace:
+    family: JetBrains Mono
+    size: 0.9em
+  link:
+    color: orange
+    decoration: none
+
+defaults:
+  bootstrap:
+    defaults:
+      navbar-bg: $brand-navy
+      navbar-fg: $brand-paper
+      navbar-hl: $brand-orange
